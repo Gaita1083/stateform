@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package stateform.controlplane.v1;
+
+option go_package = "github.com/your-org/stateform/control-plane/proto/v1;controlplanev1";
+
+// ControlPlaneService streams configuration snapshots to connected data-plane
+// instances (Rust gateway-proxy) and accepts admin-triggered reload commands.
+service ControlPlaneService {
+  // Subscribe is a server-streaming RPC. The data plane calls this on startup
+  // and receives config snapshots as they are published.
+  rpc Subscribe(SubscribeRequest) returns (stream ConfigSnapshot);
+
+  // Reload instructs the control plane to re-read its config file and push a
+  // fresh snapshot to all connected subscribers.
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+}
+
+// ── Request / Response messages ───────────────────────────────────────────────
+
+message SubscribeRequest {
+  string instance_id = 1; // unique ID of the data-plane instance
+}
+
+message ConfigSnapshot {
+  uint64 version      = 1; // monotonically increasing version counter
+  string config_yaml  = 2; // full serialised gateway config (YAML)
+  string reason       = 3; // human-readable reason for this snapshot
+  int64  generated_at = 4; // Unix timestamp (seconds)
+}
+
+message ReloadRequest {
+  string initiated_by = 1; // e.g. "admin-api", "operator"
+}
+
+message ReloadResponse {
+  bool   success     = 1;
+  string error       = 2; // non-empty when success == false
+  uint64 new_version = 3; // version of the snapshot that was broadcast
+}

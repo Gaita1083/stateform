@@ -1,0 +1,363 @@
+{
+  "__inputs": [
+    { "name": "DS_PROMETHEUS", "label": "Prometheus", "type": "datasource", "pluginId": "prometheus" }
+  ],
+  "title": "Stateform Gateway",
+  "uid": "stateform-gateway",
+  "tags": ["stateform", "gateway", "api"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+
+  "templating": {
+    "list": [
+      {
+        "name": "route_id",
+        "label": "Route",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "stateform-prometheus" },
+        "query": "label_values(stateform_requests_total, route_id)",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "interval",
+        "label": "Interval",
+        "type": "interval",
+        "options": [
+          { "text": "1m",  "value": "1m" },
+          { "text": "5m",  "value": "5m" },
+          { "text": "15m", "value": "15m" }
+        ],
+        "current": { "text": "5m", "value": "5m" }
+      }
+    ]
+  },
+
+  "panels": [
+
+    {
+      "id": 1, "type": "row",
+      "title": "Traffic overview",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 2, "type": "stat",
+      "title": "Requests / sec",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "value": null, "color": "green" },
+            { "value": 5000, "color": "yellow" },
+            { "value": 10000, "color": "red" }
+          ]}
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum(rate(stateform_requests_total{route_id=~\"$route_id\"}[$interval]))",
+        "legendFormat": "rps"
+      }]
+    },
+
+    {
+      "id": 3, "type": "stat",
+      "title": "Error rate",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "value": null, "color": "green" },
+            { "value": 0.01, "color": "yellow" },
+            { "value": 0.05, "color": "red" }
+          ]}
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum(rate(stateform_requests_total{route_id=~\"$route_id\",status=~\"5xx\"}[$interval])) / sum(rate(stateform_requests_total{route_id=~\"$route_id\"}[$interval]))",
+        "legendFormat": "error rate"
+      }]
+    },
+
+    {
+      "id": 4, "type": "stat",
+      "title": "p99 latency",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "value": null, "color": "green" },
+            { "value": 0.1,  "color": "yellow" },
+            { "value": 0.5,  "color": "red" }
+          ]}
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "histogram_quantile(0.99, sum by(le) (rate(stateform_request_duration_seconds_bucket{route_id=~\"$route_id\"}[$interval])))",
+        "legendFormat": "p99"
+      }]
+    },
+
+    {
+      "id": 5, "type": "stat",
+      "title": "Active connections",
+      "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "stateform_active_connections",
+        "legendFormat": "connections"
+      }]
+    },
+
+    {
+      "id": 6, "type": "stat",
+      "title": "Cache hit ratio",
+      "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "value": null, "color": "red" },
+            { "value": 0.5,  "color": "yellow" },
+            { "value": 0.8,  "color": "green" }
+          ]}
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum(rate(stateform_cache_lookups_total{route_id=~\"$route_id\",result=\"hit\"}[$interval])) / sum(rate(stateform_cache_lookups_total{route_id=~\"$route_id\",result!=\"bypass\"}[$interval]))",
+        "legendFormat": "hit ratio"
+      }]
+    },
+
+    {
+      "id": 7, "type": "stat",
+      "title": "Rate limited / sec",
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "value": null, "color": "green" },
+            { "value": 10,   "color": "yellow" },
+            { "value": 100,  "color": "red" }
+          ]}
+        }
+      },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum(rate(stateform_rate_limit_denied_total{route_id=~\"$route_id\"}[$interval]))",
+        "legendFormat": "denied rps"
+      }]
+    },
+
+    {
+      "id": 10, "type": "row",
+      "title": "Request latency",
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 11, "type": "timeseries",
+      "title": "Request latency percentiles",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "datasource": { "uid": "stateform-prometheus" },
+          "expr": "histogram_quantile(0.50, sum by(le) (rate(stateform_request_duration_seconds_bucket{route_id=~\"$route_id\"}[$interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "datasource": { "uid": "stateform-prometheus" },
+          "expr": "histogram_quantile(0.95, sum by(le) (rate(stateform_request_duration_seconds_bucket{route_id=~\"$route_id\"}[$interval])))",
+          "legendFormat": "p95"
+        },
+        {
+          "datasource": { "uid": "stateform-prometheus" },
+          "expr": "histogram_quantile(0.99, sum by(le) (rate(stateform_request_duration_seconds_bucket{route_id=~\"$route_id\"}[$interval])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+
+    {
+      "id": 12, "type": "timeseries",
+      "title": "Upstream latency by upstream",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "histogram_quantile(0.99, sum by(le, upstream) (rate(stateform_upstream_duration_seconds_bucket{route_id=~\"$route_id\"}[$interval])))",
+        "legendFormat": "{{upstream}} p99"
+      }]
+    },
+
+    {
+      "id": 20, "type": "row",
+      "title": "Traffic breakdown",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 21, "type": "timeseries",
+      "title": "Requests by status class",
+      "gridPos": { "x": 0, "y": 15, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "red",    "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "4xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "2xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "green",  "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum by(status) (rate(stateform_requests_total{route_id=~\"$route_id\"}[$interval]))",
+        "legendFormat": "{{status}}"
+      }]
+    },
+
+    {
+      "id": 22, "type": "timeseries",
+      "title": "Requests by route",
+      "gridPos": { "x": 12, "y": 15, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } } },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum by(route_id) (rate(stateform_requests_total{route_id=~\"$route_id\"}[$interval]))",
+        "legendFormat": "{{route_id}}"
+      }]
+    },
+
+    {
+      "id": 30, "type": "row",
+      "title": "Cache",
+      "gridPos": { "x": 0, "y": 23, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 31, "type": "timeseries",
+      "title": "Cache lookups by result",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 7 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "lineWidth": 2, "fillOpacity": 8 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "hit" },    "properties": [{ "id": "color", "value": { "fixedColor": "green",  "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "miss" },   "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "bypass" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue",   "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum by(result) (rate(stateform_cache_lookups_total{route_id=~\"$route_id\"}[$interval]))",
+        "legendFormat": "{{result}}"
+      }]
+    },
+
+    {
+      "id": 32, "type": "timeseries",
+      "title": "Rate limit denials by layer",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 7 },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "lineWidth": 2, "fillOpacity": 8 } } },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum by(layer, route_id) (rate(stateform_rate_limit_denied_total{route_id=~\"$route_id\"}[$interval]))",
+        "legendFormat": "{{route_id}} / {{layer}}"
+      }]
+    },
+
+    {
+      "id": 40, "type": "row",
+      "title": "Auth",
+      "gridPos": { "x": 0, "y": 31, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 41, "type": "timeseries",
+      "title": "Auth failures by mechanism",
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 7 },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "lineWidth": 2 } } },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum by(mechanism) (rate(stateform_auth_failures_total{route_id=~\"$route_id\"}[$interval]))",
+        "legendFormat": "{{mechanism}}"
+      }]
+    },
+
+    {
+      "id": 42, "type": "timeseries",
+      "title": "Upstream errors by upstream",
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 7 },
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "lineWidth": 2 } } },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "sum by(upstream, status) (rate(stateform_upstream_requests_total{route_id=~\"$route_id\",status=~\"5xx\"}[$interval]))",
+        "legendFormat": "{{upstream}} {{status}}"
+      }]
+    },
+
+    {
+      "id": 50, "type": "row",
+      "title": "Top-N tables",
+      "gridPos": { "x": 0, "y": 39, "w": 24, "h": 1 }
+    },
+
+    {
+      "id": 51, "type": "table",
+      "title": "Slowest routes (p99)",
+      "gridPos": { "x": 0, "y": 40, "w": 12, "h": 8 },
+      "options": { "sortBy": [{ "displayName": "p99 latency", "desc": true }] },
+      "fieldConfig": {
+        "defaults": { "unit": "s" },
+        "overrides": [{ "matcher": { "id": "byName", "options": "route_id" }, "properties": [{ "id": "custom.width", "value": 200 }] }]
+      },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "topk(10, histogram_quantile(0.99, sum by(route_id, le) (rate(stateform_request_duration_seconds_bucket[$interval]))))",
+        "legendFormat": "{{route_id}}",
+        "instant": true,
+        "format": "table"
+      }]
+    },
+
+    {
+      "id": 52, "type": "table",
+      "title": "Highest error rate by route",
+      "gridPos": { "x": 12, "y": 40, "w": 12, "h": 8 },
+      "options": { "sortBy": [{ "displayName": "error rate", "desc": true }] },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [{
+        "datasource": { "uid": "stateform-prometheus" },
+        "expr": "topk(10, sum by(route_id) (rate(stateform_requests_total{status=\"5xx\"}[$interval])) / sum by(route_id) (rate(stateform_requests_total[$interval])))",
+        "legendFormat": "{{route_id}}",
+        "instant": true,
+        "format": "table"
+      }]
+    }
+
+  ]
+}

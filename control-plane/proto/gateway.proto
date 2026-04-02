@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package stateform.gateway.v1;
+
+option go_package = "github.com/your-org/stateform/control-plane/proto;gatewayv1";
+
+// GatewayService defines the gRPC contract between the control-plane and the
+// data-plane (gateway-proxy).
+service GatewayService {
+  // PushConfig streams a new configuration snapshot to the proxy.
+  rpc PushConfig(ConfigRequest) returns (ConfigResponse);
+  // Reload instructs the proxy to hot-reload its active configuration.
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+}
+
+message ConfigRequest {
+  bytes payload = 1; // serialised GatewayConfig (YAML or JSON)
+}
+
+message ConfigResponse {
+  bool accepted = 1;
+  string error   = 2;
+}
+
+message ReloadRequest {}
+message ReloadResponse {
+  bool ok = 1;
+}
