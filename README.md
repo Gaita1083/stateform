@@ -185,46 +185,6 @@ The control plane is not on the request path. It runs informer loops, computes c
 
 ---
 
-## Architecture Diagram
-
-```
-                        ┌───────────────────────────────┐
-                        │         Kubernetes API         │
-                        └──────────────┬────────────────┘
-                                       │  watch Services/Endpoints
-                        ┌──────────────▼────────────────┐
-                        │       Control Plane (Go)        │
-                        │   informers → config compute   │
-                        │   gRPC server :50051           │
-                        └──────────────┬────────────────┘
-                                       │  ConfigSnapshot stream
-              ┌────────────────────────▼──────────────────────────┐
-              │                 Data Plane (Rust)                  │
-              │  :8080                                             │
-              │  ┌────────┐ ┌──────┐ ┌──────────┐ ┌───────────┐  │
-              │  │  TLS   │→│Router│→│   Auth   │→│Rate Limit │  │
-              │  └────────┘ └──────┘ └──────────┘ └─────┬─────┘  │
-              │                                          │        │
-              │                              ┌───────────▼──────┐ │
-              │                              │      Cache       │ │
-              │                              └───────────┬──────┘ │
-              │                                          │        │
-              │                              ┌───────────▼──────┐ │
-              │                              │  Upstream Proxy  │ │
-              │                              └──────────────────┘ │
-              │  :9090  Prometheus metrics                        │
-              └───────────────────────────────────────────────────┘
-                        │                           │
-              ┌─────────▼──────┐        ┌───────────▼───────┐
-              │     Redis       │        │    Upstreams       │
-              │  rate limiting  │        │  (your services)   │
-              │  cache L2       │        └───────────────────┘
-              │  api key store  │
-              └────────────────┘
-```
-
----
-
 ## Configuration
 
 The full reference configuration lives in [`config.yaml`](./config.yaml). Key sections:
@@ -324,41 +284,6 @@ redis-server
 
 # Start the control plane (requires kubeconfig)
 ./control-plane/control-plane
-```
-
----
-
-## Project Structure
-
-```
-stateform/
-├── config.yaml                        # Reference configuration
-├── Cargo.toml                         # Rust workspace
-├── crates/
-│   ├── gateway-proxy/                 # Binary: data plane entry point
-│   ├── gateway-core/                  # Accept loop, pipeline, TLS, shutdown
-│   ├── gateway-config/                # Config schema, validation, hot-reload watcher
-│   ├── gateway-router/                # Route matching (prefix, exact, regex, headers)
-│   ├── gateway-auth/                  # JWT, API key, mTLS providers
-│   ├── gateway-ratelimit/             # Two-tier rate limiting (local + Redis)
-│   ├── gateway-cache/                 # Two-tier response cache (DashMap + Redis)
-│   ├── gateway-metrics/               # Prometheus metrics recorder + HTTP server
-│   └── gateway-lb/                    # Load balancing algorithms
-├── control-plane/
-│   ├── go.mod
-│   ├── cmd/control-plane/main.go      # Binary: control plane entry point
-│   ├── internal/
-│   │   ├── admin/server.go            # Admin HTTP API (reload, health, status)
-│   │   ├── config/loader.go           # Config loading and validation
-│   │   ├── grpc/server.go             # gRPC server, ConfigSnapshot streaming
-│   │   └── k8s/
-│   │       ├── informer.go            # Kubernetes informer factory setup
-│   │       └── watcher.go             # Service/Endpoints event handlers
-│   └── proto/
-│       ├── control_plane.proto        # gRPC contract (ControlPlaneService)
-│       ├── gateway.proto              # Legacy gateway service definition
-│       └── v1/                        # Generated Go code (pb.go + grpc.pb.go)
-└── docker-compose.monitoring.yml      # Prometheus + Grafana stack
 ```
 
 ---
