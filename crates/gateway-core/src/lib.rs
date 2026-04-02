@@ -1,6 +1,8 @@
 // gateway-core: Tokio runtime, HTTP lifecycle, server entrypoint
 
+pub mod concurrency;
 pub mod error;
+pub mod health;
 pub mod pipeline;
 pub mod server;
 pub mod shutdown;

@@ -31,13 +31,31 @@ pub struct ListenerConfig {
     /// Optional TLS configuration. When absent the listener runs plain HTTP.
     pub tls: Option<TlsConfig>,
 
-    /// Max body size in bytes before the request is rejected (default: 4 MiB)
+    /// Max body size in bytes before the request is rejected (default: 4 MiB).
+    /// Enforced via Content-Length fast-path check AND a streaming body cap.
     #[serde(default = "defaults::max_body_bytes")]
     pub max_body_bytes: usize,
 
     /// Idle connection keep-alive timeout
     #[serde(with = "duration_secs", default = "defaults::keepalive_secs")]
     pub keepalive: Duration,
+
+    /// Global ceiling on in-flight requests across ALL routes (process-level
+    /// protection). When this limit is reached new requests immediately receive
+    /// 503 Service Unavailable with `Retry-After: 1`.
+    ///
+    /// Default: 10,000. Set based on available memory and upstream capacity.
+    /// Rule of thumb: each in-flight request buffers up to `max_body_bytes` RAM.
+    #[serde(default = "defaults::max_concurrent_requests")]
+    pub max_concurrent_requests: usize,
+
+    /// How long (ms) to wait for a concurrency permit before returning 503.
+    /// Keeps latency predictable under overload — don't let requests queue
+    /// indefinitely inside the gateway.
+    ///
+    /// Default: 500 ms.
+    #[serde(default = "defaults::concurrency_acquire_timeout_ms")]
+    pub concurrency_acquire_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +177,16 @@ pub struct RouteConfig {
     /// Optional request/response header mutations
     #[serde(default)]
     pub headers: HeaderMutations,
+
+    /// Per-route concurrency limit for bulkhead isolation.
+    ///
+    /// When set, requests beyond this limit for THIS route receive 503, even
+    /// if the global limit has capacity. Prevents a single slow upstream from
+    /// starving all other routes.
+    ///
+    /// `None` = only the global limit applies (default).
+    #[serde(default)]
+    pub max_concurrent_requests: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -371,8 +399,10 @@ mod duration_millis {
 mod defaults {
     use std::time::Duration;
 
-    pub fn max_body_bytes() -> usize        { 4 * 1024 * 1024 } // 4 MiB
-    pub fn keepalive_secs() -> Duration     { Duration::from_secs(75) }
+    pub fn max_body_bytes() -> usize              { 4 * 1024 * 1024 } // 4 MiB
+    pub fn keepalive_secs() -> Duration           { Duration::from_secs(75) }
+    pub fn max_concurrent_requests() -> usize     { 10_000 }
+    pub fn concurrency_acquire_timeout_ms() -> u64 { 500 }
     pub fn weight() -> u32                  { 1 }
     pub fn r#true() -> bool                 { true }
     pub fn ewma_alpha() -> f64              { 0.3 }

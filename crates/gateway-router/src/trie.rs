@@ -129,6 +129,7 @@ mod tests {
             load_balancing: None,
             middleware: MiddlewareConfig::default(),
             headers: HeaderMutations::default(),
+            max_concurrent_requests: None,
         })
     }
 

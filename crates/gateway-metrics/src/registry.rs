@@ -1,5 +1,6 @@
 use prometheus::{
-    exponential_buckets, histogram_opts, opts, HistogramVec, IntCounterVec, IntGauge, Registry,
+    exponential_buckets, histogram_opts, opts, GaugeVec, HistogramVec, IntCounterVec, IntGauge,
+    Registry,
 };
 
 use crate::error::MetricsError;
@@ -59,6 +60,22 @@ pub struct Metrics {
     /// Config reload attempts.
     /// status = "success" | "failure"
     pub config_reloads_total: IntCounterVec,
+
+    // ── Health check metrics ──────────────────────────────────────────────────
+    /// Per-endpoint health state as a gauge.
+    ///
+    /// Values: 1.0 = Healthy, 0.5 = Degraded, 0.0 = Unhealthy.
+    /// Labels: upstream (name), address (host:port).
+    ///
+    /// Alert rule example:
+    ///   `stateform_endpoint_health{upstream="payments"} == 0`
+    ///   → "payments upstream has at least one fully unhealthy endpoint"
+    pub endpoint_health: GaugeVec,
+
+    // ── Concurrency metrics ───────────────────────────────────────────────────
+    /// Requests rejected because the concurrency limit was exceeded.
+    /// layer = "global" | "route"
+    pub concurrency_rejected_total: IntCounterVec,
 }
 
 impl Metrics {
@@ -159,6 +176,24 @@ impl Metrics {
             &["status"],
         ).map_err(|e| MetricsError::Register { name: "stateform_config_reloads_total", source: e })?;
 
+        // ── Health check metrics ──────────────────────────────────────────────
+        let endpoint_health = GaugeVec::new(
+            opts!(
+                "stateform_endpoint_health",
+                "Endpoint health state: 1=Healthy, 0.5=Degraded, 0=Unhealthy"
+            ),
+            &["upstream", "address"],
+        ).map_err(|e| MetricsError::Register { name: "stateform_endpoint_health", source: e })?;
+
+        // ── Concurrency metrics ───────────────────────────────────────────────
+        let concurrency_rejected_total = IntCounterVec::new(
+            opts!(
+                "stateform_concurrency_rejected_total",
+                "Requests rejected due to concurrency limit (global or route)"
+            ),
+            &["route_id", "layer"],
+        ).map_err(|e| MetricsError::Register { name: "stateform_concurrency_rejected_total", source: e })?;
+
         // ── Register all ─────────────────────────────────────────────────────
         for collector in [
             Box::new(requests_total.clone())            as Box<dyn prometheus::core::Collector>,
@@ -172,6 +207,8 @@ impl Metrics {
             Box::new(auth_failures_total.clone()),
             Box::new(active_connections.clone()),
             Box::new(config_reloads_total.clone()),
+            Box::new(endpoint_health.clone()),
+            Box::new(concurrency_rejected_total.clone()),
         ] {
             registry.register(collector)
                 .map_err(|e| MetricsError::Register { name: "collector", source: e })?;
@@ -190,6 +227,8 @@ impl Metrics {
             auth_failures_total,
             active_connections,
             config_reloads_total,
+            endpoint_health,
+            concurrency_rejected_total,
         })
     }
 }

@@ -30,4 +30,10 @@ pub enum CoreError {
     Config(gateway_config::ConfigError),
     #[error("shutdown timeout: in-flight requests did not drain in time")]
     DrainTimeout,
+
+    #[error("request body too large: exceeded {max_bytes} byte limit")]
+    BodyTooLarge { max_bytes: usize },
+
+    #[error("concurrency limit exceeded for route `{route_id}`")]
+    ConcurrencyLimitExceeded { route_id: String },
 }

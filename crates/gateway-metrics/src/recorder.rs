@@ -175,6 +175,43 @@ impl MetricsRecorder {
             .with_label_values(&["failure"])
             .inc();
     }
+
+    // ── Health check ──────────────────────────────────────────────────────────
+
+    /// Update the `stateform_endpoint_health` gauge for one endpoint.
+    ///
+    /// `gauge_value` should be the result of `Health::as_gauge_value()` in
+    /// `gateway-core`:
+    ///   - `1.0` = Healthy
+    ///   - `0.5` = Degraded (operator should investigate)
+    ///   - `0.0` = Unhealthy (alert should fire, traffic excluded)
+    ///
+    /// Passing a plain `f64` keeps `gateway-metrics` free of a direct dependency
+    /// on `gateway-core` (which would create a circular dependency cycle).
+    pub fn record_endpoint_health(
+        &self,
+        upstream:    &str,
+        address:     &str,
+        gauge_value: f64,
+    ) {
+        self.inner.endpoint_health
+            .with_label_values(&[upstream, address])
+            .set(gauge_value);
+    }
+
+    // ── Concurrency ───────────────────────────────────────────────────────────
+
+    /// Record a request rejected by the concurrency limiter.
+    ///
+    /// `layer`: `"global"` when the process-wide limit fired, `"route"` when
+    /// the per-route bulkhead fired. Lets operators distinguish overload patterns:
+    ///   - `global` → system needs more capacity or the global limit is too low
+    ///   - `route`  → one route is noisy; increase its limit or scale its upstream
+    pub fn record_concurrency_rejected(&self, route_id: &str, layer: &str) {
+        self.inner.concurrency_rejected_total
+            .with_label_values(&[route_id, layer])
+            .inc();
+    }
 }
 
 // ── Request timer ─────────────────────────────────────────────────────────────

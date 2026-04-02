@@ -2,11 +2,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http_body_util::BodyExt;
+use http::StatusCode;
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use gateway_auth::AuthPipeline;
 use gateway_cache::ResponseCache;
@@ -16,7 +18,9 @@ use gateway_ratelimit::RateLimiter;
 use gateway_router::RouterHandle;
 
 use crate::{
+    concurrency::ConcurrencyLimiter,
     error::CoreError,
+    health::spawn_health_checks,
     pipeline::Pipeline,
     shutdown::{DrainGuard, ShutdownCoordinator, ShutdownSignal},
     tls,
@@ -25,8 +29,6 @@ use crate::{
 
 // ── GatewayServer ─────────────────────────────────────────────────────────────
 
-/// The top-level server. Owns the accept loop, all shared state, and
-/// coordinates startup and graceful shutdown.
 pub struct GatewayServer {
     config:   Arc<ConfigWatcher>,
     pipeline: Pipeline,
@@ -35,23 +37,16 @@ pub struct GatewayServer {
 }
 
 impl GatewayServer {
-    /// Build the complete server from a config watcher.
-    ///
-    /// Establishes all Redis connections, builds router and auth pipeline,
-    /// and constructs the shared pipeline state. Does not bind any sockets.
     pub async fn build(config: Arc<ConfigWatcher>) -> Result<Self, CoreError> {
         let cfg = config.current();
 
-        // Registry of Prometheus metrics (private registry — no global state)
         let metrics_inner = gateway_metrics::registry::Metrics::new()?;
         let metrics       = MetricsRecorder::new(metrics_inner);
 
-        // Router (hot-reloadable via ArcSwap)
         let router = RouterHandle::new(&cfg)
             .map_err(|e| CoreError::Config(gateway_config::ConfigError::Validation(e.to_string())))?;
         let router = Arc::new(router);
 
-        // Auth pipeline (establishes Redis connection for API key lookups)
         let auth = AuthPipeline::new(&cfg.auth)
             .await
             .map_err(|e| CoreError::Config(
@@ -59,7 +54,6 @@ impl GatewayServer {
             ))?;
         let auth = Arc::new(auth);
 
-        // Rate limiter (establishes Redis connections per policy)
         let ratelimit = RateLimiter::new(&cfg)
             .await
             .map_err(|e| CoreError::Config(
@@ -67,7 +61,6 @@ impl GatewayServer {
             ))?;
         let ratelimit = Arc::new(ratelimit);
 
-        // Response cache (establishes Redis connection)
         let cache = ResponseCache::new(&cfg.cache)
             .await
             .map_err(|e| CoreError::Config(
@@ -75,8 +68,9 @@ impl GatewayServer {
             ))?;
         let cache = Arc::new(cache);
 
-        // Upstream pools (HTTP connection pools per upstream)
-        let upstreams = Arc::new(UpstreamRegistry::build(&cfg));
+        let upstreams    = Arc::new(UpstreamRegistry::build(&cfg));
+        let concurrency  = Arc::new(ConcurrencyLimiter::build(&cfg));
+        let max_body_bytes = cfg.listener.max_body_bytes;
 
         let pipeline = Pipeline {
             router,
@@ -85,6 +79,8 @@ impl GatewayServer {
             cache,
             metrics: metrics.clone(),
             upstreams,
+            concurrency,
+            max_body_bytes,
         };
 
         Ok(Self {
@@ -95,23 +91,23 @@ impl GatewayServer {
         })
     }
 
-    /// Start the gateway — binds the listener, spawns the metrics server,
-    /// and runs the accept loop until shutdown is signalled.
     pub async fn run(self) -> Result<(), CoreError> {
         let cfg = self.config.current();
 
-        // ── Metrics server (separate port) ────────────────────────────────────
-        MetricsServer::new(
-            self.metrics.clone(),
-            &cfg.observability.metrics_bind,
-        )
-        .spawn()
-        .await?;
+        // ── Metrics server ────────────────────────────────────────────────────
+        MetricsServer::new(self.metrics.clone(), &cfg.observability.metrics_bind)
+            .spawn()
+            .await?;
 
-        // ── Hot-reload watcher ────────────────────────────────────────────────
-        let mut reload_rx = self.config.subscribe();
-        let reload_router = Arc::clone(&self.pipeline.router);
-        let reload_metrics = self.metrics.clone();
+        // ── Active health checks ──────────────────────────────────────────────
+        // Spawns one background task per endpoint that has health_check configured.
+        // Tasks update EndpointState.health atomically; routing immediately reacts.
+        spawn_health_checks(Arc::clone(&self.pipeline.upstreams), self.metrics.clone());
+
+        // ── Config hot-reload watcher ─────────────────────────────────────────
+        let mut reload_rx    = self.config.subscribe();
+        let reload_router    = Arc::clone(&self.pipeline.router);
+        let reload_metrics   = self.metrics.clone();
         tokio::spawn(async move {
             loop {
                 if reload_rx.changed().await.is_err() { break; }
@@ -131,21 +127,20 @@ impl GatewayServer {
 
         // ── OS signal handler ─────────────────────────────────────────────────
         let shutdown_signal = self.shutdown.signal();
-        let shutdown_arc = Arc::clone(&self.shutdown);
+        let shutdown_arc    = Arc::clone(&self.shutdown);
         tokio::spawn(async move {
             wait_for_os_signal().await;
             shutdown_arc.shutdown().await;
         });
 
         // ── TCP listener ──────────────────────────────────────────────────────
-        let bind = &cfg.listener.bind;
+        let bind     = &cfg.listener.bind;
         let listener = TcpListener::bind(bind)
             .await
             .map_err(|e| CoreError::Bind { addr: bind.clone(), source: e })?;
 
         info!(addr = %bind, "gateway listening");
 
-        // ── Accept loop ───────────────────────────────────────────────────────
         let tls_acceptor = cfg.listener.tls.as_ref()
             .map(|tls_cfg| tls::build_acceptor(tls_cfg))
             .transpose()?;
@@ -156,19 +151,18 @@ impl GatewayServer {
 
     async fn accept_loop(
         &self,
-        listener: TcpListener,
+        listener:     TcpListener,
         tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
         mut shutdown: ShutdownSignal,
     ) {
         loop {
             tokio::select! {
-                // Accept new connections
                 result = listener.accept() => {
                     match result {
                         Ok((stream, peer)) => {
-                            let pipeline    = self.pipeline.clone();
-                            let drain_guard = self.shutdown.acquire();
-                            let tls         = tls_acceptor.clone();
+                            let pipeline      = self.pipeline.clone();
+                            let drain_guard   = self.shutdown.acquire();
+                            let tls           = tls_acceptor.clone();
                             self.metrics.connection_open();
                             let metrics_close = self.metrics.clone();
 
@@ -183,7 +177,6 @@ impl GatewayServer {
                         }
                     }
                 }
-                // Shutdown signal received
                 _ = shutdown.wait() => {
                     info!("accept loop stopping");
                     break;
@@ -196,26 +189,20 @@ impl GatewayServer {
 // ── Connection handler ────────────────────────────────────────────────────────
 
 async fn serve_connection(
-    stream: TcpStream,
-    peer: SocketAddr,
+    stream:   TcpStream,
+    peer:     SocketAddr,
     pipeline: Pipeline,
-    tls: Option<tokio_rustls::TlsAcceptor>,
-    _drain: DrainGuard, // held for lifetime of connection
+    tls:      Option<tokio_rustls::TlsAcceptor>,
+    _drain:   DrainGuard,
 ) {
     match tls {
         Some(acceptor) => {
             match acceptor.accept(stream).await {
-                Ok(tls_stream) => {
-                    let io = TokioIo::new(tls_stream);
-                    serve_http(io, peer, pipeline).await;
-                }
-                Err(e) => warn!(peer = %peer, error = %e, "TLS handshake failed"),
+                Ok(tls_stream) => serve_http(TokioIo::new(tls_stream), peer, pipeline).await,
+                Err(e)         => warn!(peer = %peer, error = %e, "TLS handshake failed"),
             }
         }
-        None => {
-            let io = TokioIo::new(stream);
-            serve_http(io, peer, pipeline).await;
-        }
+        None => serve_http(TokioIo::new(stream), peer, pipeline).await,
     }
 }
 
@@ -226,18 +213,62 @@ where
     let svc = hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
         let pipeline = pipeline.clone();
         async move {
-            // Collect the incoming body into Bytes so it's owned and cloneable
-            let (parts, body) = req.into_parts();
-            let body_bytes = match body.collect().await {
-                Ok(c) => c.to_bytes(),
+            let (mut parts, body) = req.into_parts();
+
+            // ── Body size enforcement ─────────────────────────────────────────
+            //
+            // Two-phase check:
+            // Phase 1: Content-Length fast path — reject before reading a byte.
+            //          Clients sending large uploads don't need to stream the whole
+            //          body before getting a 413; they get it at headers.
+            // Phase 2: Streaming cap via http_body_util::Limited — catches bodies
+            //          without Content-Length (chunked transfer-encoding) or those
+            //          that lie about their Content-Length.
+            let max = pipeline.max_body_bytes;
+
+            if let Some(len) = parts.headers
+                .get(http::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<usize>().ok())
+            {
+                if len > max {
+                    warn!(
+                        peer = %peer,
+                        content_length = len,
+                        max,
+                        "request body exceeds limit (Content-Length check)"
+                    );
+                    return Ok::<_, std::convert::Infallible>(payload_too_large());
+                }
+            }
+
+            let body_bytes = match Limited::new(body, max).collect().await {
+                Ok(collected) => collected.to_bytes(),
                 Err(e) => {
-                    warn!(peer = %peer, error = %e, "failed to read request body");
+                    let msg = e.to_string().to_ascii_lowercase();
+                    if msg.contains("length limit") || msg.contains("limit exceeded") {
+                        warn!(peer = %peer, max, "request body exceeded streaming limit");
+                        return Ok(payload_too_large());
+                    }
+                    warn!(peer = %peer, error = %msg, "failed to read request body");
                     Bytes::new()
                 }
             };
+
+            // ── X-Request-ID injection ────────────────────────────────────────
+            //
+            // Generate or preserve. Done here (not in pipeline.rs) so the ID is
+            // available for the tracing span before pipeline::handle() is called.
+            if !parts.headers.contains_key("x-request-id") {
+                let id = Uuid::new_v4().to_string();
+                if let Ok(val) = http::header::HeaderValue::from_str(&id) {
+                    parts.headers.insert("x-request-id", val);
+                }
+            }
+
             let owned_req = hyper::Request::from_parts(parts, body_bytes);
-            let resp = crate::pipeline::handle(&pipeline, owned_req).await;
-            Ok::<_, std::convert::Infallible>(resp)
+            let resp      = crate::pipeline::handle(&pipeline, owned_req).await;
+            Ok(resp)
         }
     });
 
@@ -245,11 +276,21 @@ where
         .serve_connection(io, svc)
         .await
     {
-        // Connection reset / client disconnect are expected — log at debug
         if !is_benign_conn_error(e.as_ref()) {
             error!(peer = %peer, error = %e, "connection error");
         }
     }
+}
+
+// ── Static responses ──────────────────────────────────────────────────────────
+
+fn payload_too_large() -> hyper::Response<Full<Bytes>> {
+    let body = serde_json::json!({ "error": "request body too large" }).to_string();
+    hyper::Response::builder()
+        .status(StatusCode::PAYLOAD_TOO_LARGE)
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(Full::new(Bytes::from(body)))
+        .unwrap()
 }
 
 fn is_benign_conn_error(e: &dyn std::error::Error) -> bool {

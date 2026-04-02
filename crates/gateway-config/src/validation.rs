@@ -109,6 +109,8 @@ mod tests {
                 tls: None,
                 max_body_bytes: 4 * 1024 * 1024,
                 keepalive: Duration::from_secs(75),
+                max_concurrent_requests: 10_000,
+                concurrency_acquire_timeout_ms: 500,
             },
             upstreams: {
                 let mut m = HashMap::new();
@@ -143,6 +145,7 @@ mod tests {
                 load_balancing: None,
                 middleware: MiddlewareConfig::default(),
                 headers: HeaderMutations::default(),
+                max_concurrent_requests: None,
             }],
             rate_limiting: RateLimitConfig {
                 redis_url: "redis://localhost".into(),
