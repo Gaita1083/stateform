@@ -1,0 +1,189 @@
+# ─────────────────────────────────────────────────────────
+# Stateform API Gateway — Reference Configuration
+# ─────────────────────────────────────────────────────────
+# All duration values are in SECONDS unless the key ends
+# in _ms (milliseconds).
+
+listener:
+  bind: "0.0.0.0:8080"
+  max_body_bytes: 4194304   # 4 MiB
+  keepalive: 75
+  # Remove the tls block to run plain HTTP
+  tls:
+    cert_path: /certs/server.crt
+    key_path:  /certs/server.key
+    # Set client_ca_path to enforce mTLS on all connections
+    client_ca_path: /certs/ca.pem
+
+# ── Upstreams ──────────────────────────────────────────────
+upstreams:
+  # ── Example 1: stateless API cluster (Weighted Round Robin)
+  api-cluster:
+    endpoints:
+      - address: "10.0.0.1:8000"
+        weight: 10
+      - address: "10.0.0.2:8000"
+        weight: 5   # takes half the traffic of the first
+      - address: "10.0.0.3:8000"
+        weight: 5
+    load_balancing:
+      algorithm: weighted_round_robin
+    health_check:
+      path: /healthz
+      interval: 10
+      timeout: 2
+      healthy_threshold: 2
+      unhealthy_threshold: 3
+    timeouts:
+      connect: 2
+      request: 30
+      idle: 90
+    retry:
+      max_attempts: 2
+      base_backoff: 50    # ms
+      on_statuses: [502, 503, 504]
+
+  # ── Example 2: pod-level cluster (Least Connections with EWMA)
+  compute-cluster:
+    endpoints:
+      - address: "10.1.0.1:9000"
+      - address: "10.1.0.2:9000"
+      - address: "10.1.0.3:9000"
+    load_balancing:
+      algorithm: least_connections
+      ewma_alpha: 0.3   # smoothing factor, 0.0 = hard min, 1.0 = instant
+    timeouts:
+      connect: 1
+      request: 60
+      idle: 120
+
+  # ── Example 3: stateful cluster (Consistent Hashing)
+  chat-cluster:
+    endpoints:
+      - address: "10.2.0.1:8080"
+      - address: "10.2.0.2:8080"
+      - address: "10.2.0.3:8080"
+    load_balancing:
+      algorithm: consistent_hashing
+      hash_header: X-Session-Id   # value of this header determines the backend
+      virtual_nodes: 150
+    timeouts:
+      connect: 1
+      request: 300   # long-lived connections
+      idle: 600
+
+# ── Routes (evaluated top-to-bottom) ──────────────────────
+routes:
+  # Public chat — no auth, consistent hashing, rate-limited leniently
+  - id: chat
+    match_:
+      path:
+        type: prefix
+        value: /v1/chat
+    upstream: chat-cluster
+    middleware:
+      rate_limit:
+        policy: lenient
+
+  # Authenticated API — JWT required, cached, strict rate limit
+  - id: api-authenticated
+    match_:
+      path:
+        type: prefix
+        value: /v1/api
+      method: null   # all methods
+    upstream: api-cluster
+    middleware:
+      auth:
+        jwt: true
+        api_key: false
+        mtls: false
+      rate_limit:
+        policy: strict
+      cache:
+        ttl: 30
+        read_only: false
+    headers:
+      request_set:
+        X-Gateway-Version: "1"
+      request_remove:
+        - X-Internal-Token
+      response_set:
+        X-Cache-Hit: "{{cache_hit}}"  # future template support
+
+  # Internal service-to-service — mTLS only, no rate limit
+  - id: internal-rpc
+    match_:
+      path:
+        type: prefix
+        value: /internal
+      headers:
+        X-Service-Name: ".*"   # require header to be present
+    upstream: compute-cluster
+    middleware:
+      auth:
+        jwt: false
+        api_key: false
+        mtls: true
+
+  # Catch-all (must be last)
+  - id: default
+    match_:
+      path:
+        type: prefix
+        value: /
+    upstream: api-cluster
+
+# ── Rate limiting ──────────────────────────────────────────
+rate_limiting:
+  redis_url: "redis://redis:6379"
+  policies:
+    strict:
+      local:
+        capacity: 100
+        refill_rate: 100    # tokens/sec
+      distributed:
+        algorithm: sliding_window
+        max_requests: 1000
+        window: 60          # per 60 seconds
+
+    lenient:
+      local:
+        capacity: 1000
+        refill_rate: 1000
+      distributed:
+        algorithm: token_bucket
+        capacity: 10000
+        refill_rate: 500
+
+# ── Cache ──────────────────────────────────────────────────
+cache:
+  redis_url: "redis://redis:6379"
+  l1_capacity: 10000   # number of entries in the in-process cache
+
+# ── Auth ───────────────────────────────────────────────────
+auth:
+  jwt:
+    jwks_url: "https://auth.example.com/.well-known/jwks.json"
+    audience:
+      - "stateform-gateway"
+    issuers:
+      - "https://auth.example.com"
+    jwks_cache_ttl: 300
+
+  api_keys:
+    redis_url: "redis://redis:6379"
+    redis_key_prefix: "stateform:apikey:"
+
+  mtls:
+    client_ca_path: /certs/ca.pem
+    required: true
+
+# ── Observability ──────────────────────────────────────────
+observability:
+  metrics_bind: "0.0.0.0:9090"   # Prometheus scrapes here
+
+# ── Control plane bridge ───────────────────────────────────
+control_plane:
+  grpc_address: "http://control-plane:50051"
+  reconnect_interval: 5

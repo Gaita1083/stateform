@@ -1,0 +1,20 @@
+[package]
+name    = "gateway-metrics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace        = true
+tracing.workspace      = true
+anyhow.workspace       = true
+thiserror.workspace    = true
+bytes.workspace        = true
+http.workspace         = true
+http-body-util.workspace  = true
+hyper.workspace        = true
+hyper-util.workspace   = true
+prometheus.workspace   = true
+gateway-config     = { path = "../gateway-config" }
+gateway-auth       = { path = "../gateway-auth" }
+gateway-cache      = { path = "../gateway-cache" }
+gateway-ratelimit  = { path = "../gateway-ratelimit" }

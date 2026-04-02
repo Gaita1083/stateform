@@ -1,0 +1,11 @@
+[package]
+name    = "gateway-lb"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace       = true
+tracing.workspace     = true
+anyhow.workspace      = true
+parking_lot.workspace = true
+gateway-config = { path = "../gateway-config" }

@@ -1,0 +1,82 @@
+[workspace]
+members = [
+    "crates/gateway-config",
+    "crates/gateway-core",
+    "crates/gateway-router",
+    "crates/gateway-lb",
+    "crates/gateway-auth",
+    "crates/gateway-ratelimit",
+    "crates/gateway-cache",
+    "crates/gateway-metrics",
+    "crates/gateway-proxy",
+]
+resolver = "2"
+
+[workspace.package]
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["Stateform Contributors"]
+license     = "MIT"
+repository  = "https://github.com/your-org/stateform"
+
+# ── Shared dependency versions (single source of truth) ─────────────────────
+[workspace.dependencies]
+# Async runtime
+tokio       = { version = "1.38", features = ["full"] }
+tokio-util  = { version = "0.7", features = ["codec"] }
+
+# HTTP
+hyper       = { version = "1.3", features = ["full"] }
+hyper-util  = { version = "0.1", features = ["tokio", "client", "client-legacy"] }
+http        = "1.1"
+http-body-util = "0.1"
+bytes       = "1.6"
+
+# Config + serialisation
+serde       = { version = "1.0", features = ["derive"] }
+serde_yaml  = "0.9"
+serde_json  = "1.0"
+toml        = "0.8"
+
+# Error handling
+thiserror   = "1.0"
+anyhow      = "1.0"
+
+# Observability
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter", "json"] }
+prometheus          = { version = "0.13", features = ["process"] }
+
+# Redis
+redis       = { version = "0.25", features = ["tokio-comp", "connection-manager", "cluster-async"] }
+
+# TLS / Auth
+rustls              = "0.23"
+tokio-rustls        = "0.26"
+rustls-pemfile      = "1.0"
+jsonwebtoken        = "9.3"
+
+# Utilities
+arc-swap    = "1.7"         # lock-free hot-swap for config
+dashmap     = "6.0"         # concurrent hashmap (L1 cache)
+uuid        = { version = "1.8", features = ["v4", "fast-rng"] }
+rand        = "0.8"
+parking_lot = "0.12"
+
+# gRPC (control-plane bridge)
+tonic       = "0.11"
+prost       = "0.12"
+
+# Testing
+mockall     = "0.12"
+
+[profile.release]
+opt-level   = 3
+lto         = "thin"        # faster than "fat", still excellent
+codegen-units = 1
+panic       = "abort"       # smaller binary, no unwinding overhead
+strip       = "debuginfo"
+
+[profile.dev]
+opt-level   = 0
+debug       = true

@@ -1,0 +1,16 @@
+[package]
+name    = "gateway-ratelimit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace       = true
+tracing.workspace     = true
+anyhow.workspace      = true
+thiserror.workspace   = true
+http.workspace        = true
+dashmap.workspace     = true
+parking_lot.workspace = true
+redis.workspace       = true
+gateway-config = { path = "../gateway-config" }
+gateway-auth   = { path = "../gateway-auth" }

@@ -1,0 +1,23 @@
+[package]
+name    = "gateway-auth"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace          = true
+http.workspace           = true
+tracing.workspace        = true
+anyhow.workspace         = true
+thiserror.workspace      = true
+serde.workspace          = true
+serde_json.workspace     = true
+jsonwebtoken.workspace   = true
+rustls.workspace         = true
+tokio-rustls.workspace   = true
+rustls-pemfile.workspace = true
+redis.workspace          = true
+hyper.workspace          = true
+hyper-util.workspace     = true
+http-body-util.workspace = true
+bytes.workspace          = true
+gateway-config = { path = "../gateway-config" }

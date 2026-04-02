@@ -1,0 +1,27 @@
+[package]
+name    = "gateway-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace              = true
+tokio-util.workspace         = true
+tracing.workspace            = true
+anyhow.workspace             = true
+thiserror.workspace          = true
+bytes.workspace              = true
+http.workspace               = true
+http-body-util.workspace     = true
+hyper.workspace              = true
+hyper-util.workspace         = true
+rustls.workspace             = true
+tokio-rustls.workspace       = true
+rustls-pemfile.workspace     = true
+arc-swap.workspace           = true
+serde_json.workspace         = true
+gateway-config     = { path = "../gateway-config" }
+gateway-router     = { path = "../gateway-router" }
+gateway-auth       = { path = "../gateway-auth" }
+gateway-ratelimit  = { path = "../gateway-ratelimit" }
+gateway-cache      = { path = "../gateway-cache" }
+gateway-metrics    = { path = "../gateway-metrics" }
