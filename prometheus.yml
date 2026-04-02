@@ -1,0 +1,28 @@
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: stateform-local
+
+scrape_configs:
+
+  # ── Stateform data plane (Rust gateway) ──────────────────────────────────────
+  - job_name: stateform-gateway
+    static_configs:
+      - targets: ["host.docker.internal:9090"]
+        labels:
+          component: gateway
+    # Adjust the target if your gateway metrics bind differs from :9090
+
+  # ── Stateform control plane (Go) ─────────────────────────────────────────────
+  # Uncomment when you add /metrics to the control plane
+  # - job_name: stateform-control-plane
+  #   static_configs:
+  #     - targets: ["host.docker.internal:8082"]
+  #       labels:
+  #         component: control-plane
+
+  # ── Prometheus self-monitoring ────────────────────────────────────────────────
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
